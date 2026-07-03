@@ -466,13 +466,20 @@ def render_prediction_page():
         table_rows.append({
             "Grade":       r["grade"],
             "Data Years":  r["data_points"],
-            "Current Avg": r["current_avg"] or "-",
-            "Predicted":   r["predicted_avg"] or "-",
-            "Trend/yr":    r["trend_slope"] or "-",
+            "Current Avg": r["current_avg"] if r["current_avg"] is not None else None,
+            "Predicted":   r["predicted_avg"] if r["predicted_avg"] is not None else None,
+            "Trend/yr":    round(r["trend_slope"], 2) if r["trend_slope"] is not None else None,
             "Status":      r["status"],
             "Confidence":  r["confidence"],
         })
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+    
+    df = pd.DataFrame(table_rows)
+    
+    st.dataframe(
+        df,
+        width='stretch',
+        hide_index=True
+    )
 
     # Messages
     st.subheader("AI Insights by Grade")

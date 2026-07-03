@@ -141,10 +141,6 @@ def login_screen():
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
-        st.markdown('</div>', unsafe_allow_html=True)
-        with st.expander("Demo credentials"):
-            st.write("**Admin** — `admin` / `admin123`")
-            st.write("**Teacher** — `teacher` / `teacher123`")
 
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────────

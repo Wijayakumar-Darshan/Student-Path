@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🎓 Student Performance & Marks Management System
 
 A Streamlit web app for schools to manage student marks, streams, career
@@ -110,3 +111,7 @@ since they only call the helper functions in `database.py`.
 - Add a "change password" / user-management screen for production use.
 - Add CSV/Excel export alongside PDF if needed (pandas `.to_csv()` /
   `.to_excel()` can be added easily next to the existing download buttons).
+=======
+# Student-Path
+Analyzing students marks and identify the level of their academic performance. 
+>>>>>>> 7a78cf168af538d4773ca8b9bee4f73c42e8e29c

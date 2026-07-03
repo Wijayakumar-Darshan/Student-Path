@@ -143,7 +143,7 @@ def login_screen():
                     st.error("Invalid username or password.")
 
 
-# ── ADMIN ─────────────────────────────────────────────────────────────────────
+# ── ADMIN DASHBOARD ─────────────────────────────────────────────────────────
 def admin_dashboard():
     _sidebar_user("🛡️", "Admin")
     page = st.sidebar.radio("Navigate", [
@@ -169,13 +169,15 @@ def admin_dashboard():
         chosen_stream = st.selectbox("Stream", stream_names)
         stream_id     = db.get_stream_id(chosen_stream)
 
-        with st.form("add_subject_form"):
+        with st.form("add_subject_form", clear_on_submit=True):
             new_subject = st.text_input("New subject name")
             if st.form_submit_button("➕ Add Subject"):
                 if new_subject.strip():
                     db.add_subject(new_subject.strip(), stream_id)
-                    st.success(f"Added '{new_subject}' to {chosen_stream}.")
+                    st.success(f"✅ Added '{new_subject}' to {chosen_stream}.")
                     st.rerun()
+                else:
+                    st.error("Subject name cannot be empty.")
 
         subs = db.get_subjects_by_stream(stream_id)
         st.subheader(f"Subjects in {chosen_stream}")
@@ -186,20 +188,27 @@ def admin_dashboard():
                 with st.expander(f"✏️ {sub['name']}"):
                     col1, col2 = st.columns([3, 1])
                     with col1:
-                        with st.form(f"edit_sub_{sub['id']}"):
+                        with st.form(f"edit_sub_{sub['id']}", clear_on_submit=True):
                             edited = st.text_input("Subject name", value=sub["name"])
                             if st.form_submit_button("💾 Save"):
                                 if edited.strip():
                                     db.update_subject(sub["id"], edited.strip())
-                                    st.success("Updated."); st.rerun()
+                                    st.success("✅ Updated successfully.")
+                                    st.rerun()
+                                else:
+                                    st.error("Subject name cannot be empty.")
                     with col2:
                         mc, cc = db.subject_usage_counts(sub["id"])
                         if mc or cc:
                             st.caption(f"⚠️ {mc} marks, {cc} cutoffs")
                         if st.checkbox("Confirm delete", key=f"cd_{sub['id']}"):
                             if st.button("🗑️ Delete", key=f"ds_{sub['id']}"):
-                                db.delete_subject(sub["id"], cascade=True)
-                                st.success("Deleted."); st.rerun()
+                                try:
+                                    db.delete_subject(sub["id"], cascade=True)
+                                    st.success("✅ Deleted successfully.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(str(e))
 
     # ── Manage Careers ─────────────────────────────────────────────────────
     elif page == "🎯 Manage Careers & Cutoffs":
@@ -218,6 +227,7 @@ def admin_dashboard():
                     "cutoff_count":"Subjects w/ Cutoffs","student_count":"Students Assigned"})
                 st.dataframe(df[["Career","Stream","Subjects w/ Cutoffs","Students Assigned"]],
                              use_container_width=True, hide_index=True)
+
                 st.markdown("##### Drill into a career's cutoffs")
                 opts = {f"{c['name']} ({c['stream_name']})": c for c in all_careers}
                 sel  = st.selectbox("Select career", list(opts.keys()), key="view_c")
@@ -236,10 +246,11 @@ def admin_dashboard():
                 st.warning("Add subjects for this stream first.")
             else:
                 career_name   = st.text_input("Career dream name", key="add_c_name")
-                st.caption("Pick only subjects this career actually requires — students may take different combinations.")
+                st.caption("Pick only subjects this career actually requires.")
                 subj_opts     = {s["name"]: s["id"] for s in subs}
                 sel_names     = st.multiselect("Subjects required", list(subj_opts.keys()), key="add_c_subs")
-                with st.form("add_career_form"):
+
+                with st.form("add_career_form", clear_on_submit=True):
                     cutoffs = {}
                     if sel_names:
                         st.write("Minimum cutoff marks:")
@@ -248,8 +259,6 @@ def admin_dashboard():
                             with cols[i % 2]:
                                 cutoffs[subj_opts[nm]] = st.number_input(
                                     nm, 0, 100, 50, key=f"ac_{subj_opts[nm]}")
-                    else:
-                        st.info("Select subjects above first.")
                     if st.form_submit_button("➕ Save Career"):
                         if not career_name.strip():
                             st.error("Career name required.")
@@ -257,7 +266,8 @@ def admin_dashboard():
                             st.error("Select at least one subject.")
                         else:
                             db.add_career(career_name.strip(), stream_id, cutoffs)
-                            st.success(f"Saved '{career_name}'."); st.rerun()
+                            st.success(f"✅ Career '{career_name}' saved successfully.")
+                            st.rerun()
 
         with tab_update:
             chosen_stream_u = st.selectbox("Stream", stream_names, key="upd_c_stream")
@@ -274,12 +284,14 @@ def admin_dashboard():
                 rows  = db.get_career_cutoffs(c["id"])
                 ex    = {r["subject_id"]: r["min_marks"] for r in rows}
                 edited_name = st.text_input("Career name", value=c["name"], key=f"ucn_{c['id']}")
+
                 st.caption("Add/remove subjects; only selected ones will be kept after saving.")
                 subj_opts_u  = {s["name"]: s["id"] for s in subs_u}
                 cur_names    = [s["name"] for s in subs_u if s["id"] in ex]
                 sel_names_u  = st.multiselect("Subjects required", list(subj_opts_u.keys()),
                                                default=cur_names, key=f"ucs_{c['id']}")
-                with st.form(f"upd_c_{c['id']}"):
+
+                with st.form(f"upd_c_{c['id']}", clear_on_submit=True):
                     new_cutoffs = {}
                     if sel_names_u:
                         st.write("Minimum cutoff marks:")
@@ -289,8 +301,6 @@ def admin_dashboard():
                             with cols[i % 2]:
                                 new_cutoffs[sid2] = st.number_input(
                                     nm, 0, 100, int(ex.get(sid2, 50)), key=f"uc_{c['id']}_{sid2}")
-                    else:
-                        st.info("Select subjects above.")
                     if st.form_submit_button("💾 Save Changes"):
                         if not edited_name.strip():
                             st.error("Name required.")
@@ -298,7 +308,8 @@ def admin_dashboard():
                             st.error("Select at least one subject.")
                         else:
                             db.update_career(c["id"], edited_name.strip(), new_cutoffs, replace=True)
-                            st.success("Updated."); st.rerun()
+                            st.success("✅ Career updated successfully.")
+                            st.rerun()
 
         with tab_delete:
             chosen_stream_d = st.selectbox("Stream", stream_names, key="del_c_stream")
@@ -311,12 +322,15 @@ def admin_dashboard():
                 c     = next(x for x in careers_d if x["name"] == sel_d)
                 n     = db.career_usage_counts(c["id"])
                 if n:
-                    st.warning(f"⚠️ '{c['name']}' is assigned to {n} student(s). "
-                               "Deleting will clear their career dream.")
+                    st.warning(f"⚠️ '{c['name']}' is assigned to {n} student(s).")
                 if st.checkbox(f"Confirm delete '{c['name']}'", key=f"conf_d_{c['id']}"):
                     if st.button("🗑️ Delete Career", key=f"del_c_{c['id']}"):
-                        db.delete_career(c["id"], cascade=True)
-                        st.success("Deleted."); st.rerun()
+                        try:
+                            db.delete_career(c["id"], cascade=True)
+                            st.success("✅ Career deleted successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
 
     # ── Student Charts ─────────────────────────────────────────────────────
     elif page == "📊 Student Performance Charts":
@@ -530,7 +544,7 @@ def render_student_chart_and_ai(student, year_filter=None):
     return ai_plan, ai_summary
 
 
-# ── TEACHER ───────────────────────────────────────────────────────────────────
+# ── TEACHER DASHBOARD ────────────────────────────────────────────────────────
 def teacher_dashboard():
     _sidebar_user("🧑‍🏫", "Counselling Teacher")
     page = st.sidebar.radio("Navigate", [
@@ -547,76 +561,116 @@ def teacher_dashboard():
     _banner("🧑‍🏫", "Teacher Dashboard",
             "Add students, record marks per term and track AI career-readiness")
 
-    streams      = db.get_streams()
+    streams = db.get_streams()
     stream_names = [s["name"] for s in streams]
 
-    # ── Add / Update Student ───────────────────────────────────────────────
+    # ── Add / Update Student ─────────────────────────────────────────────────
     if page == "➕ Add / Update Student":
         st.header("➕ Add / Update Student")
 
-        # FIX: stream selection OUTSIDE the form so career list refreshes dynamically
         col1, col2 = st.columns(2)
         with col1:
             stream_choice = st.selectbox("Stream", stream_names, key="stu_stream")
         with col2:
-            grade_choice  = st.selectbox("Grade", [f"Grade {g}" for g in db.GRADES], key="stu_grade")
+            grade_choice = st.selectbox("Grade", [f"Grade {g}" for g in db.GRADES], key="stu_grade")
 
         stream_id = db.get_stream_id(stream_choice)
         grade_val = int(grade_choice.split()[-1])
 
-        # Careers now fetched fresh from DB based on the selected stream
-        careers       = db.get_careers_by_stream(stream_id)
-        career_names  = ["-- none --"] + [c["name"] for c in careers]
+        all_subjects = db.get_all_subjects()
+        subject_options = {s["name"]: s["id"] for s in all_subjects}
+
+        st.markdown("---")
+        lookup = st.text_input("🔍 Enter registration number to edit", key="lookup_reg")
+        existing = db.get_student(lookup.strip()) if lookup.strip() else None
 
         with st.form("student_form"):
-            reg_no        = st.text_input("Student Registration Number")
-            name          = st.text_input("Student Name")
-            career_choice = st.selectbox("Career Dream", career_names)
+            reg_no = st.text_input("Student Registration Number", value=existing["reg_no"] if existing else "")
+            name = st.text_input("Student Name", value=existing["name"] if existing else "")
+
+            careers = db.get_careers_by_stream(stream_id)
+            career_names = ["-- none --"] + [c["name"] for c in careers]
+            default_career = existing.get("career_name", "-- none --") if existing else "-- none --"
+            career_choice = st.selectbox("Career Dream", career_names,
+                                        index=career_names.index(default_career) if default_career in career_names else 0)
+
+            st.subheader("📚 Select Subjects (Any from the system)")
+            current_subject_ids = db.get_student_subject_ids(reg_no) if existing else []
+            default_subjects = [s["name"] for s in all_subjects if s["id"] in current_subject_ids]
+
+            selected_subject_names = st.multiselect(
+                "Choose subjects for this student",
+                options=list(subject_options.keys()),
+                default=default_subjects,
+                help="Student can choose ANY subjects from the entire system."
+            )
 
             if st.form_submit_button("💾 Save Student"):
-                if reg_no.strip() and name.strip():
+                if not reg_no.strip() or not name.strip():
+                    st.error("Registration number and name are required.")
+                else:
                     career_id = None
                     if career_choice != "-- none --":
-                        career_id = next(c["id"] for c in careers if c["name"] == career_choice)
+                        career_id = next((c["id"] for c in careers if c["name"] == career_choice), None)
+
                     db.upsert_student(reg_no.strip(), name.strip(), grade_val, stream_id, career_id)
-                    st.success(f"✅ Saved: {name} (Reg: {reg_no}, Grade {grade_val}, {stream_choice})")
-                else:
-                    st.error("Registration number and name are required.")
+                    selected_ids = [subject_options[nm] for nm in selected_subject_names]
+                    db.assign_subjects_to_student(reg_no.strip(), selected_ids)
 
-        # Show existing student info if reg no typed
-        st.markdown("---")
-        st.caption("🔍 Look up an existing student to pre-fill the form:")
-        lookup = st.text_input("Enter registration number to look up", key="lookup_reg")
-        if lookup.strip():
-            existing = db.get_student(lookup.strip())
-            if existing:
-                st.json({k: v for k, v in existing.items() if k != "password_hash"})
+                    st.success(f"✅ Student {name} saved with {len(selected_ids)} subjects.")
+                    st.rerun()
+
+        if existing:
+            st.markdown("---")
+            st.subheader(f"🔧 Manage Subjects for {existing['name']}")
+            current_ids = db.get_student_subject_ids(existing["reg_no"])
+            current_subs = [s for s in all_subjects if s["id"] in current_ids]
+
+            if current_subs:
+                st.write("**Current Subjects:**")
+                for sub in current_subs:
+                    c1, c2 = st.columns([5, 1])
+                    with c1: st.write(f"• {sub['name']}")
+                    with c2:
+                        if st.button("🗑️ Remove", key=f"del_sub_{sub['id']}"):
+                            db.remove_subject_from_student(existing["reg_no"], sub["id"])
+                            st.success(f"Removed {sub['name']}")
+                            st.rerun()
             else:
-                st.info("No student found with that registration number.")
+                st.info("No subjects assigned yet.")
 
-    # ── Enter Marks ────────────────────────────────────────────────────────
+            st.write("**Add Additional Subjects:**")
+            with st.form("add_sub_form"):
+                remaining = [s["name"] for s in all_subjects if s["id"] not in current_ids]
+                to_add = st.multiselect("Select subjects to add", remaining)
+                if st.form_submit_button("➕ Add"):
+                    if to_add:
+                        new_ids = [subject_options[n] for n in to_add]
+                        db.assign_subjects_to_student(existing["reg_no"], list(set(current_ids + new_ids)))
+                        st.success("Subjects added successfully.")
+                        st.rerun()
+
+        # ── Enter Marks - Uses Student's Assigned Subjects ─────────────────────
     elif page == "📝 Enter Marks":
         st.header("📝 Enter Marks (per Term)")
 
-        # Grade filter to narrow student list
+        # Grade filter
         grade_f = st.selectbox("Filter students by Grade",
                                ["All"] + [f"Grade {g}" for g in db.GRADES], key="marks_grade_f")
-        g_val   = int(grade_f.split()[-1]) if grade_f != "All" else None
+        g_val = int(grade_f.split()[-1]) if grade_f != "All" else None
         students = db.get_all_students(grade=g_val)
 
         if not students:
             st.info("No students found. Add a student first.")
             return
 
-        opts    = {f"Gr{s['grade']} | {s['reg_no']} - {s['name']} ({s['stream_name']})": s
-                   for s in students}
-        chosen  = st.selectbox("Select Student", list(opts.keys()))
+        opts = {f"Gr{s['grade']} | {s['reg_no']} - {s['name']} ({s['stream_name']})": s for s in students}
+        chosen = st.selectbox("Select Student", list(opts.keys()))
         student = opts[chosen]
 
         col1, col2, col3 = st.columns(3)
         term = col1.selectbox("Term", [1, 2, 3])
         year = col2.number_input("Year", 2000, 2100, 2026, step=1)
-        # Grade in this particular year (defaults to student's registered grade)
         grade_for_marks = col3.selectbox(
             "Grade (this year)",
             [f"Grade {g}" for g in db.GRADES],
@@ -624,9 +678,12 @@ def teacher_dashboard():
         )
         grade_int = int(grade_for_marks.split()[-1])
 
-        subjects = db.get_subjects_by_stream(student["stream_id"])
+        # === IMPORTANT: Use student's assigned subjects ===
+        subjects = db.get_student_subjects(student["reg_no"])
+
         if not subjects:
-            st.warning("No subjects configured for this stream. Ask Admin to add subjects.")
+            st.warning(f"No subjects assigned to {student['name']} yet. "
+                      "Please go to '➕ Add / Update Student' and assign subjects first.")
             return
 
         existing = {
@@ -637,18 +694,22 @@ def teacher_dashboard():
 
         with st.form("marks_form"):
             entries = {}
-            cols    = st.columns(2)
+            cols = st.columns(2)
             for i, sub in enumerate(subjects):
                 with cols[i % 2]:
                     entries[sub["id"]] = st.number_input(
-                        sub["name"], 0.0, 100.0,
-                        float(existing.get(sub["id"], 0.0)), step=1.0,
+                        sub["name"], 
+                        0.0, 100.0,
+                        float(existing.get(sub["id"], 0.0)), 
+                        step=1.0,
                         key=f"mk_{sub['id']}_{term}_{year}",
                     )
             if st.form_submit_button(f"💾 Save Term {term} Marks"):
                 for subject_id, mark_val in entries.items():
                     db.save_mark(student["reg_no"], subject_id, term, year, grade_int, mark_val)
-                st.success(f"Term {term} marks saved for {student['name']} — Grade {grade_int} ({year}).")
+                st.success(f"✅ Term {term} marks saved for {student['name']} — Grade {grade_int} ({year}).")
+
+
 
     # ── Performance & AI ───────────────────────────────────────────────────
     elif page == "📊 Performance & AI Insight":

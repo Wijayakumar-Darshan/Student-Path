@@ -1,7 +1,5 @@
 """
 database.py  –  SQLite data layer for the Student Performance System.
-Grades 6-13 supported. Each mark row carries the grade the student was
-in during that year so the AI predictor can aggregate by grade over time.
 """
 
 import sqlite3
@@ -136,6 +134,14 @@ def init_db():
                 FOREIGN KEY(career_id) REFERENCES careers(id)
             );
 
+            CREATE TABLE IF NOT EXISTS student_subjects (
+                reg_no     TEXT    NOT NULL,
+                subject_id INTEGER NOT NULL,
+                PRIMARY KEY (reg_no, subject_id),
+                FOREIGN KEY(reg_no)     REFERENCES students(reg_no) ON DELETE CASCADE,
+                FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS marks (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 reg_no     TEXT    NOT NULL,
@@ -150,7 +156,7 @@ def init_db():
             );
         """)
 
-        # Migrate existing DBs that lack the grade column
+        # Migration
         cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
         if "grade" not in cols:
             cur.execute("ALTER TABLE students ADD COLUMN grade INTEGER NOT NULL DEFAULT 10")
@@ -174,19 +180,22 @@ def init_db():
             sid = stream_ids[stream_name]
             for career_name, cutoffs in careers.items():
                 cur.execute("INSERT OR IGNORE INTO careers (name, stream_id) VALUES (?,?)", (career_name, sid))
-                cid = cur.execute(
+                cid_row = cur.execute(
                     "SELECT id FROM careers WHERE name=? AND stream_id=?", (career_name, sid)
-                ).fetchone()["id"]
-                for subj_name, mm in cutoffs.items():
-                    sr = cur.execute(
-                        "SELECT id FROM subjects WHERE name=? AND stream_id=?", (subj_name, sid)
-                    ).fetchone()
-                    if sr:
-                        cur.execute(
-                            "INSERT OR IGNORE INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)",
-                            (cid, sr["id"], mm),
-                        )
+                ).fetchone()
+                if cid_row:
+                    cid = cid_row["id"]
+                    for subj_name, mm in cutoffs.items():
+                        sr = cur.execute(
+                            "SELECT id FROM subjects WHERE name=? AND stream_id=?", (subj_name, sid)
+                        ).fetchone()
+                        if sr:
+                            cur.execute(
+                                "INSERT OR IGNORE INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)",
+                                (cid, sr["id"], mm),
+                            )
 
+        # Default users
         cur.execute(
             "INSERT OR IGNORE INTO users (username,password_hash,full_name,role) VALUES (?,?,?,?)",
             ("admin", hash_password("admin123"), "System Administrator", "admin"),
@@ -199,7 +208,107 @@ def init_db():
 
 
 # ---------------------------------------------------------------------------
-# Queries
+# Student Subjects CRUD
+# ---------------------------------------------------------------------------
+def get_student_subject_ids(reg_no: str):
+    result = run_query(
+        "SELECT subject_id FROM student_subjects WHERE reg_no=?",
+        (reg_no,), fetch=True
+    )
+    return [row["subject_id"] for row in result]
+
+
+def assign_subjects_to_student(reg_no: str, subject_ids: list):
+    run_query("DELETE FROM student_subjects WHERE reg_no=?", (reg_no,))
+    for sid in subject_ids:
+        run_query(
+            "INSERT OR IGNORE INTO student_subjects (reg_no, subject_id) VALUES (?,?)",
+            (reg_no, sid)
+        )
+
+
+def remove_subject_from_student(reg_no: str, subject_id: int):
+    run_query(
+        "DELETE FROM student_subjects WHERE reg_no=? AND subject_id=?",
+        (reg_no, subject_id)
+    )
+
+
+def get_student_subjects(reg_no: str):
+    return run_query("""
+        SELECT s.* FROM student_subjects ss
+        JOIN subjects s ON ss.subject_id = s.id
+        WHERE ss.reg_no = ?
+        ORDER BY s.name
+    """, (reg_no,), fetch=True)
+
+
+def get_all_subjects():
+    return run_query("SELECT * FROM subjects ORDER BY name", fetch=True)
+
+
+# ---------------------------------------------------------------------------
+# Usage Count Functions
+# ---------------------------------------------------------------------------
+def subject_usage_counts(subject_id):
+    mc = run_query("SELECT COUNT(*) as c FROM marks WHERE subject_id=?", 
+                   (subject_id,), fetchone=True)["c"]
+    cc = run_query("SELECT COUNT(*) as c FROM career_cutoffs WHERE subject_id=?", 
+                   (subject_id,), fetchone=True)["c"]
+    return mc, cc
+
+
+def career_usage_counts(career_id):
+    result = run_query("SELECT COUNT(*) as c FROM students WHERE career_id=?", 
+                       (career_id,), fetchone=True)
+    return result["c"] if result else 0
+
+
+# ---------------------------------------------------------------------------
+# Career CRUD (including missing update_career)
+# ---------------------------------------------------------------------------
+def add_career(name, stream_id, cutoffs: dict):
+    run_query("INSERT OR IGNORE INTO careers (name,stream_id) VALUES (?,?)", (name, stream_id))
+    row = run_query("SELECT id FROM careers WHERE name=? AND stream_id=?", (name, stream_id), fetchone=True)
+    cid = row["id"]
+    for sid, mm in cutoffs.items():
+        run_query(
+            """INSERT INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)
+               ON CONFLICT(career_id,subject_id) DO UPDATE SET min_marks=excluded.min_marks""",
+            (cid, sid, mm),
+        )
+    return cid
+
+
+def clear_career_cutoffs(career_id):
+    run_query("DELETE FROM career_cutoffs WHERE career_id=?", (career_id,))
+
+
+def update_career(career_id, new_name, cutoffs: dict, replace=True):
+    """Update career name and cutoffs"""
+    run_query("UPDATE careers SET name=? WHERE id=?", (new_name, career_id))
+    if replace:
+        clear_career_cutoffs(career_id)
+    for sid, mm in cutoffs.items():
+        run_query(
+            """INSERT INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)
+               ON CONFLICT(career_id,subject_id) DO UPDATE SET min_marks=excluded.min_marks""",
+            (career_id, sid, mm),
+        )
+
+
+def delete_career(career_id, cascade=False):
+    n = career_usage_counts(career_id)
+    if n and not cascade:
+        raise ValueError(f"Career is assigned to {n} student(s).")
+    if cascade:
+        run_query("UPDATE students SET career_id=NULL WHERE career_id=?", (career_id,))
+    run_query("DELETE FROM career_cutoffs WHERE career_id=?", (career_id,))
+    run_query("DELETE FROM careers WHERE id=?", (career_id,))
+
+
+# ---------------------------------------------------------------------------
+# Other Functions
 # ---------------------------------------------------------------------------
 def get_streams():
     return run_query("SELECT * FROM streams ORDER BY name", fetch=True)
@@ -231,22 +340,18 @@ def get_career_cutoffs(career_id):
         (career_id,), fetch=True,
     )
 
-def get_career(career_id):
-    return run_query("SELECT * FROM careers WHERE id=?", (career_id,), fetchone=True)
-
-# Students
 def get_student(reg_no):
     return run_query("SELECT * FROM students WHERE reg_no=?", (reg_no,), fetchone=True)
 
 def upsert_student(reg_no, name, grade, stream_id, career_id):
     if get_student(reg_no):
         run_query(
-            "UPDATE students SET name=?,grade=?,stream_id=?,career_id=? WHERE reg_no=?",
+            "UPDATE students SET name=?, grade=?, stream_id=?, career_id=? WHERE reg_no=?",
             (name, grade, stream_id, career_id, reg_no),
         )
     else:
         run_query(
-            "INSERT INTO students (reg_no,name,grade,stream_id,career_id) VALUES (?,?,?,?,?)",
+            "INSERT INTO students (reg_no, name, grade, stream_id, career_id) VALUES (?,?,?,?,?)",
             (reg_no, name, grade, stream_id, career_id),
         )
 
@@ -260,13 +365,12 @@ def get_all_students(stream_id=None, grade=None):
     return run_query(
         f"""SELECT st.*, c.name as career_name, str.name as stream_name
             FROM students st
-            LEFT JOIN careers c   ON st.career_id=c.id
-            LEFT JOIN streams str ON st.stream_id=str.id
+            LEFT JOIN careers c   ON st.career_id = c.id
+            LEFT JOIN streams str ON st.stream_id = str.id
             {where} ORDER BY st.grade, st.name""",
         tuple(params), fetch=True,
     )
 
-# Marks
 def save_mark(reg_no, subject_id, term, year, grade, marks):
     run_query(
         """INSERT INTO marks (reg_no,subject_id,term,year,grade,marks)
@@ -292,92 +396,29 @@ def get_marks_for_student(reg_no, year=None):
     )
 
 def get_grade_year_averages():
-    """Return one row per (grade, year) with the average marks across all
-    students & subjects — used by the AI prediction model."""
     return run_query(
         """SELECT m.grade, m.year, AVG(m.marks) as avg_marks, COUNT(*) as sample_size
            FROM marks m GROUP BY m.grade, m.year ORDER BY m.grade, m.year""",
         fetch=True,
     )
 
-def get_grade_subject_averages(grade):
-    """Average marks per subject for a given grade across all years."""
-    return run_query(
-        """SELECT s.name as subject_name, AVG(m.marks) as avg_marks, COUNT(*) as n
-           FROM marks m JOIN subjects s ON m.subject_id=s.id
-           WHERE m.grade=? GROUP BY m.subject_id ORDER BY s.name""",
-        (grade,), fetch=True,
-    )
-
-# Subjects CRUD
 def add_subject(name, stream_id):
     run_query("INSERT OR IGNORE INTO subjects (name,stream_id) VALUES (?,?)", (name, stream_id))
-
-def get_subject(subject_id):
-    return run_query("SELECT * FROM subjects WHERE id=?", (subject_id,), fetchone=True)
 
 def update_subject(subject_id, new_name):
     run_query("UPDATE subjects SET name=? WHERE id=?", (new_name, subject_id))
 
-def subject_usage_counts(subject_id):
-    mc = run_query("SELECT COUNT(*) as c FROM marks WHERE subject_id=?", (subject_id,), fetchone=True)["c"]
-    cc = run_query("SELECT COUNT(*) as c FROM career_cutoffs WHERE subject_id=?", (subject_id,), fetchone=True)["c"]
-    return mc, cc
-
 def delete_subject(subject_id, cascade=False):
-    mc, cc = subject_usage_counts(subject_id)
-    if (mc or cc) and not cascade:
-        raise ValueError(f"Subject is used in {mc} marks record(s) and {cc} career cutoff(s).")
+    if not cascade:
+        mc, cc = subject_usage_counts(subject_id)
+        if mc or cc:
+            raise ValueError(f"Subject is used in {mc} marks and {cc} cutoffs.")
     if cascade:
         run_query("DELETE FROM marks WHERE subject_id=?", (subject_id,))
         run_query("DELETE FROM career_cutoffs WHERE subject_id=?", (subject_id,))
+        run_query("DELETE FROM student_subjects WHERE subject_id=?", (subject_id,))
     run_query("DELETE FROM subjects WHERE id=?", (subject_id,))
 
-# Careers CRUD
-def add_career(name, stream_id, cutoffs: dict):
-    run_query("INSERT OR IGNORE INTO careers (name,stream_id) VALUES (?,?)", (name, stream_id))
-    row = run_query("SELECT id FROM careers WHERE name=? AND stream_id=?", (name, stream_id), fetchone=True)
-    cid = row["id"]
-    for sid, mm in cutoffs.items():
-        run_query(
-            """INSERT INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)
-               ON CONFLICT(career_id,subject_id) DO UPDATE SET min_marks=excluded.min_marks""",
-            (cid, sid, mm),
-        )
-    return cid
-
-def clear_career_cutoffs(career_id):
-    run_query("DELETE FROM career_cutoffs WHERE career_id=?", (career_id,))
-
-def update_career(career_id, new_name, cutoffs: dict, replace=True):
-    run_query("UPDATE careers SET name=? WHERE id=?", (new_name, career_id))
-    if replace:
-        clear_career_cutoffs(career_id)
-    for sid, mm in cutoffs.items():
-        run_query(
-            """INSERT INTO career_cutoffs (career_id,subject_id,min_marks) VALUES (?,?,?)
-               ON CONFLICT(career_id,subject_id) DO UPDATE SET min_marks=excluded.min_marks""",
-            (career_id, sid, mm),
-        )
-
-def career_usage_counts(career_id):
-    return run_query(
-        "SELECT COUNT(*) as c FROM students WHERE career_id=?", (career_id,), fetchone=True
-    )["c"]
-
-def delete_career(career_id, cascade=False):
-    n = career_usage_counts(career_id)
-    if n and not cascade:
-        raise ValueError(f"Career is assigned to {n} student(s).")
-    if cascade:
-        run_query("UPDATE students SET career_id=NULL WHERE career_id=?", (career_id,))
-    run_query("DELETE FROM career_cutoffs WHERE career_id=?", (career_id,))
-    run_query("DELETE FROM careers WHERE id=?", (career_id,))
-
-# Users
-def get_user(username):
-    return run_query("SELECT * FROM users WHERE username=?", (username,), fetchone=True)
-
 def verify_login(username, password):
-    u = get_user(username)
+    u = run_query("SELECT * FROM users WHERE username=?", (username,), fetchone=True)
     return u if (u and u["password_hash"] == hash_password(password)) else None
